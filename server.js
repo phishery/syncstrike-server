@@ -92,6 +92,10 @@ function handleMessage(ws, data) {
             submitPlan(ws, data.roomCode, data.plan);
             break;
 
+        case 'rematch_request':
+            handleRematch(ws, data.roomCode);
+            break;
+
         default:
             ws.send(JSON.stringify({ type: 'error', message: 'Unknown message type' }));
     }
@@ -107,7 +111,9 @@ function createRoom(ws, roomCode) {
         host: ws,
         guest: null,
         hostPlan: null,
-        guestPlan: null
+        guestPlan: null,
+        hostRematch: false,
+        guestRematch: false
     });
 
     ws.send(JSON.stringify({ type: 'room_created', roomCode }));
@@ -169,6 +175,38 @@ function submitPlan(ws, roomCode, plan) {
         room.guestPlan = null;
 
         console.log(`Room ${roomCode}: Both plans submitted, starting resolution`);
+    }
+}
+
+function handleRematch(ws, roomCode) {
+    const room = rooms.get(roomCode);
+
+    if (!room) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Room not found' }));
+        return;
+    }
+
+    // Mark this player as wanting rematch
+    if (ws === room.host) {
+        room.hostRematch = true;
+    } else if (ws === room.guest) {
+        room.guestRematch = true;
+    }
+
+    // Check if both want rematch
+    if (room.hostRematch && room.guestRematch) {
+        // Reset rematch flags for next round
+        room.hostRematch = false;
+        room.guestRematch = false;
+
+        // Notify both players
+        room.host.send(JSON.stringify({ type: 'rematch_ready' }));
+        room.guest.send(JSON.stringify({ type: 'rematch_ready' }));
+
+        console.log(`Room ${roomCode}: Both players ready for rematch`);
+    } else {
+        // Let this player know they're waiting
+        ws.send(JSON.stringify({ type: 'rematch_waiting' }));
     }
 }
 
