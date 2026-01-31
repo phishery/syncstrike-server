@@ -67,10 +67,10 @@ wss.on('connection', (ws) => {
                     rooms.delete(code);
                     console.log(`Room ${code} closed - host left during game`);
                 } else {
-                    // No guest yet - keep room alive for reconnection (60 second grace period)
+                    // No guest yet - keep room alive for reconnection (2 minute grace period)
                     room.host = null;
                     room.hostDisconnectedAt = Date.now();
-                    console.log(`Room ${code} host disconnected - keeping room for 60s`);
+                    console.log(`Room ${code} host disconnected - keeping room for 2 minutes`);
                 }
             } else if (room.guest === ws) {
                 // Guest disconnected
@@ -276,10 +276,10 @@ const heartbeat = setInterval(() => {
 setInterval(() => {
     const now = Date.now();
     for (const [code, room] of rooms.entries()) {
-        // Clean up rooms where host disconnected more than 60 seconds ago
-        if (room.hostDisconnectedAt && (now - room.hostDisconnectedAt > 60000)) {
+        // Clean up rooms where host disconnected more than 2 minutes ago
+        if (room.hostDisconnectedAt && (now - room.hostDisconnectedAt > 120000)) {
             rooms.delete(code);
-            console.log(`Cleaned up room ${code} - host didn't reconnect within 60s`);
+            console.log(`Cleaned up room ${code} - host didn't reconnect within 2 minutes`);
             continue;
         }
         // Clean up fully stale rooms
