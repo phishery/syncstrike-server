@@ -116,10 +116,18 @@ function handleMessage(ws, data) {
 function createRoom(ws, roomCode, version) {
     const existingRoom = rooms.get(roomCode);
 
-    // Allow host to reclaim their room if they disconnected briefly
+    // Allow host to reclaim their room
     if (existingRoom) {
-        if (existingRoom.host === null && existingRoom.hostDisconnectedAt) {
+        // Check if existing host is actually disconnected or has a dead connection
+        const hostDisconnected = existingRoom.host === null && existingRoom.hostDisconnectedAt;
+        const hostConnectionDead = existingRoom.host && existingRoom.host.readyState !== WebSocket.OPEN;
+
+        if (hostDisconnected || hostConnectionDead) {
             // Host is reconnecting - reclaim the room
+            // Close the old socket if it exists
+            if (existingRoom.host && existingRoom.host !== ws) {
+                try { existingRoom.host.close(); } catch(e) {}
+            }
             existingRoom.host = ws;
             existingRoom.hostDisconnectedAt = null;
             existingRoom.hostVersion = version || 'unknown';
@@ -127,6 +135,8 @@ function createRoom(ws, roomCode, version) {
             console.log(`Room ${roomCode} reclaimed by host (v${version})`);
             return;
         }
+
+        // Room exists with active host - reject
         ws.send(JSON.stringify({ type: 'error', message: 'Room already exists' }));
         return;
     }
