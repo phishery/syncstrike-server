@@ -81,11 +81,11 @@ wss.on('connection', (ws) => {
 function handleMessage(ws, data) {
     switch (data.type) {
         case 'create':
-            createRoom(ws, data.roomCode);
+            createRoom(ws, data.roomCode, data.version);
             break;
 
         case 'join':
-            joinRoom(ws, data.roomCode);
+            joinRoom(ws, data.roomCode, data.version);
             break;
 
         case 'submit_plan':
@@ -101,7 +101,7 @@ function handleMessage(ws, data) {
     }
 }
 
-function createRoom(ws, roomCode) {
+function createRoom(ws, roomCode, version) {
     if (rooms.has(roomCode)) {
         ws.send(JSON.stringify({ type: 'error', message: 'Room already exists' }));
         return;
@@ -110,6 +110,8 @@ function createRoom(ws, roomCode) {
     rooms.set(roomCode, {
         host: ws,
         guest: null,
+        hostVersion: version || 'unknown',
+        guestVersion: null,
         hostPlan: null,
         guestPlan: null,
         hostRematch: false,
@@ -117,10 +119,10 @@ function createRoom(ws, roomCode) {
     });
 
     ws.send(JSON.stringify({ type: 'room_created', roomCode }));
-    console.log(`Room ${roomCode} created. Total rooms:`, rooms.size);
+    console.log(`Room ${roomCode} created (v${version}). Total rooms:`, rooms.size);
 }
 
-function joinRoom(ws, roomCode) {
+function joinRoom(ws, roomCode, version) {
     const room = rooms.get(roomCode);
 
     if (!room) {
@@ -133,13 +135,31 @@ function joinRoom(ws, roomCode) {
         return;
     }
 
+    // Check version match
+    if (room.hostVersion !== version) {
+        // Notify both players of version mismatch
+        room.host.send(JSON.stringify({
+            type: 'version_mismatch',
+            otherVersion: version || 'unknown'
+        }));
+        ws.send(JSON.stringify({
+            type: 'version_mismatch',
+            otherVersion: room.hostVersion
+        }));
+        // Clean up the room
+        rooms.delete(roomCode);
+        console.log(`Room ${roomCode} closed due to version mismatch (host: ${room.hostVersion}, guest: ${version})`);
+        return;
+    }
+
     room.guest = ws;
+    room.guestVersion = version;
 
     // Notify both players
     room.host.send(JSON.stringify({ type: 'player_joined' }));
     ws.send(JSON.stringify({ type: 'player_joined' }));
 
-    console.log(`Player joined room ${roomCode}`);
+    console.log(`Player joined room ${roomCode} (v${version})`);
 }
 
 function submitPlan(ws, roomCode, plan) {
