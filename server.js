@@ -58,17 +58,29 @@ wss.on('connection', (ws) => {
         console.log('Client disconnected');
         // Clean up rooms where this client was
         for (const [code, room] of rooms.entries()) {
-            if (room.host === ws || room.guest === ws) {
-                // Notify other player
-                const other = room.host === ws ? room.guest : room.host;
-                if (other && other.readyState === WebSocket.OPEN) {
-                    other.send(JSON.stringify({
-                        type: 'error',
-                        message: 'Opponent disconnected'
+            if (room.host === ws) {
+                if (room.guest && room.guest.readyState === WebSocket.OPEN) {
+                    // Game in progress - notify guest and delete room
+                    room.guest.send(JSON.stringify({
+                        type: 'opponent_left'
+                    }));
+                    rooms.delete(code);
+                    console.log(`Room ${code} closed - host left during game`);
+                } else {
+                    // No guest yet - keep room alive for reconnection (60 second grace period)
+                    room.host = null;
+                    room.hostDisconnectedAt = Date.now();
+                    console.log(`Room ${code} host disconnected - keeping room for 60s`);
+                }
+            } else if (room.guest === ws) {
+                // Guest disconnected
+                if (room.host && room.host.readyState === WebSocket.OPEN) {
+                    room.host.send(JSON.stringify({
+                        type: 'opponent_left'
                     }));
                 }
                 rooms.delete(code);
-                console.log(`Room ${code} closed`);
+                console.log(`Room ${code} closed - guest left`);
             }
         }
     });
@@ -102,7 +114,19 @@ function handleMessage(ws, data) {
 }
 
 function createRoom(ws, roomCode, version) {
-    if (rooms.has(roomCode)) {
+    const existingRoom = rooms.get(roomCode);
+
+    // Allow host to reclaim their room if they disconnected briefly
+    if (existingRoom) {
+        if (existingRoom.host === null && existingRoom.hostDisconnectedAt) {
+            // Host is reconnecting - reclaim the room
+            existingRoom.host = ws;
+            existingRoom.hostDisconnectedAt = null;
+            existingRoom.hostVersion = version || 'unknown';
+            ws.send(JSON.stringify({ type: 'room_created', roomCode }));
+            console.log(`Room ${roomCode} reclaimed by host (v${version})`);
+            return;
+        }
         ws.send(JSON.stringify({ type: 'error', message: 'Room already exists' }));
         return;
     }
@@ -115,7 +139,8 @@ function createRoom(ws, roomCode, version) {
         hostPlan: null,
         guestPlan: null,
         hostRematch: false,
-        guestRematch: false
+        guestRematch: false,
+        hostDisconnectedAt: null
     });
 
     ws.send(JSON.stringify({ type: 'room_created', roomCode }));
@@ -127,6 +152,12 @@ function joinRoom(ws, roomCode, version) {
 
     if (!room) {
         ws.send(JSON.stringify({ type: 'error', message: 'Room not found' }));
+        return;
+    }
+
+    // Check if host is temporarily disconnected
+    if (!room.host || room.host.readyState !== WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Host is reconnecting, try again in a moment' }));
         return;
     }
 
@@ -241,16 +272,25 @@ const heartbeat = setInterval(() => {
     });
 }, 30000);
 
-// Clean up stale rooms every 5 minutes
+// Clean up stale rooms every 30 seconds
 setInterval(() => {
+    const now = Date.now();
     for (const [code, room] of rooms.entries()) {
+        // Clean up rooms where host disconnected more than 60 seconds ago
+        if (room.hostDisconnectedAt && (now - room.hostDisconnectedAt > 60000)) {
+            rooms.delete(code);
+            console.log(`Cleaned up room ${code} - host didn't reconnect within 60s`);
+            continue;
+        }
+        // Clean up fully stale rooms
         if ((!room.host || room.host.readyState !== WebSocket.OPEN) &&
-            (!room.guest || room.guest.readyState !== WebSocket.OPEN)) {
+            (!room.guest || room.guest.readyState !== WebSocket.OPEN) &&
+            !room.hostDisconnectedAt) {
             rooms.delete(code);
             console.log(`Cleaned up stale room ${code}`);
         }
     }
-}, 5 * 60 * 1000);
+}, 30000);
 
 wss.on('close', () => {
     clearInterval(heartbeat);
